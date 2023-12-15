@@ -58,7 +58,7 @@ jobs:
             --disable-content-trust
     outputs:
       digest: ${{ steps.push-to-registry.outputs.digest }}
-    needs: analyze
+    needs: build
 
   update-deployment-manifests:
     name: update deployment artifacts
