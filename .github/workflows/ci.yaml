@@ -60,7 +60,6 @@ jobs:
     needs: build
 
   update-deployment-manifests:
-    name: update deployment artifacts
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -85,7 +84,6 @@ jobs:
     needs: containerize
 
   open-pr:
-    name: Open pull request
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
