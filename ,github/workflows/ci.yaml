@@ -1,0 +1,103 @@
+name: ci
+on:
+  push:
+    branches:
+    - main
+env:
+  IMAGE_TAGS: ${{ github.sha }}
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+  REGISTRY_USER: ${{ github.actor }}
+  REGISTRY_PASSWORD: ${{ github.token }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: setup java
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: build
+        run: ./mvnw clean install
+      - name: upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: quarkus-app
+          path: target/quarkus-app/
+
+  containerize:
+    name: "build container image"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: quarkus-app
+          path: target/quarkus-app/
+      - name: build image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: getting-started-async
+          tags: ${{ env.IMAGE_TAGS }}
+          containerfiles: |
+            src/main/docker/Dockerfile.jvm
+      - name: push to registry
+        id: push-to-registry
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: getting-started-async
+          tags: ${{ env.IMAGE_TAGS }}
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+          extra-args: |
+            --disable-content-trust
+    outputs:
+      digest: ${{ steps.push-to-registry.outputs.digest }}
+    needs: analyze
+
+  update-deployment-manifests:
+    name: update deployment artifacts
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        repository: rprakashg-redhat/rhacm-demos
+        ref: refs/heads/main
+        token: ${{ secrets.GH_TOKEN }}
+    - name: setup git
+      run: |
+        # Setting up the git config.
+        git config --global user.email "rgopinat@redhat.com" # HARD CODING FOR NOW, NEED TO DETERMINE HOW TO RETRIEVE THIS FROM CURRENT USER CONTEXT
+        git config --global user.name ${{ github.actor }}
+    - name: update manifest
+      run: |
+        IMAGE=\"${{ env.IMAGE_REGISTRY }}/getting-started-async@${{ needs.containerize.outputs.digest }}\"
+        git checkout -b "${{ github.job }}-${{ github.sha }}"
+        sed -i "s#\(.*value:\s*\).*#\1 ${IMAGE}#" applications/getting-started-async/overlays/prod/kustomization.yaml
+
+        git add .
+        git commit -m "updated manifest to point to image tag $IMAGE"
+        git push origin "${{ github.job }}-${{ github.sha }}"
+    needs: containerize
+
+  open-pr:
+    name: Open pull request
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: open pr
+      uses: ./.github/actions/open-pr
+      with:
+        repo: rprakashg-redhat/rhacm-demos
+        token: ${{ secrets.GH_TOKEN }}
+        title: "PR for commit - ${{ github.sha }}"
+        body: "PR for commit - ${{ github.sha }} by ${{ github.actor }}"
+        base: main
+        head: "update-deployment-manifests-${{ github.sha }}"
+    - uses: actions/checkout@v3
+    needs: update-deployment-manifests
